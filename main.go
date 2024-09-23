@@ -21,13 +21,27 @@ type options struct {
 	DB_NAME    string `short:"d" long:"database" description:"mysql database" default:"test" required:"false"`
 	QUERY_FILE string `short:"f" long:"file" description:"query file" required:"true"`
 	VALUE      string `short:"v" long:"value" description:"value" required:"true"`
+	CONN_TYPE  string `short:"t" long:"type" description:"connection type" default:"tcp" required:"false"`
 	DEBUG      bool   `long:"debug" description:"debug mode"`
 }
 
 var opts options
 
 func newDB() (*sql.DB, error) {
-	var dsn string = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", opts.DB_USER, os.Getenv("MYSQL_PASSWORD"), opts.DB_HOST, opts.DB_PORT, opts.DB_NAME)
+	// UNIX/TCPでDSNを作成
+	var dsn string
+	switch {
+	case opts.CONN_TYPE == "unix":
+		return nil, fmt.Errorf("unix socket is not supported") // ToDo
+	case opts.CONN_TYPE == "tcp":
+		fallthrough
+	default:
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", opts.DB_USER, os.Getenv("MYSQL_PASSWORD"), opts.DB_HOST, opts.DB_PORT, opts.DB_NAME)
+	}
+
+	if opts.DEBUG {
+		fmt.Printf("[DEBUG] DSN: %s\n", dsn)
+	}
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, err
