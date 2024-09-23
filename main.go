@@ -1,9 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"database/sql"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -35,36 +35,46 @@ func newDB() (*sql.DB, error) {
 	return db, nil
 }
 
-func isSingleColumnSelect(query string) bool {
+func checkSQL(query string) bool {
 	// 正規表現でSELECT句を解析し、カラム数を確認
 	re := regexp.MustCompile(`(?i)^SELECT\s+([^,]+?)\s+FROM`)
 	match := re.FindStringSubmatch(query)
 	if len(match) == 0 {
-		return false // SELECT句が不正またはカラム数が1でない場合
+		if opts.DEBUG {
+			fmt.Printf("[DEBUG] No match: %s\n", query)
+		}
+		return false
 	}
 
 	// カラム名にワイルドカード(*)が含まれていないかを確認
 	column := strings.TrimSpace(match[1])
 	if column == "*" {
-		return false // ワイルドカードが使用されている場合
+		if opts.DEBUG {
+			fmt.Printf("[DEBUG] Wildcard: %s\n", query)
+		}
+		return false
 	}
 
 	// 末尾がセミコロンで終わっているかを確認
 	if !strings.HasSuffix(query, ";") {
-		return false // セミコロンで終わっていない場合
+		if opts.DEBUG {
+			fmt.Printf("[DEBUG] No semicolon: %s\n", query)
+		}
+		return false
+	}
+
+	// limit 1が含まれているかを確認
+	if !strings.Contains(query, "LIMIT 1") {
+		if opts.DEBUG {
+			fmt.Printf("[DEBUG] No LIMIT 1: %s\n", query)
+		}
+		return false
 	}
 
 	return true
 }
 
 func isValidSQL(db *sql.DB, query string) bool {
-	// クエリをトリムして大文字に変換し、SELECTで始まるかを確認
-	trimmedQuery := strings.TrimSpace(query)
-	if !strings.HasPrefix(strings.ToUpper(trimmedQuery), "SELECT") {
-		fmt.Printf("Rejected non-SELECT query: %s\n", query)
-		return false
-	}
-
 	if opts.DEBUG {
 		fmt.Printf("[DEBUG] Query: %s\n", query)
 	}
@@ -78,22 +88,22 @@ func isValidSQL(db *sql.DB, query string) bool {
 	// ステートメントを閉じる
 	defer stmt.Close()
 
-	// クエリがSELECTで1カラムのみを指定しているかを確認
-	if !isSingleColumnSelect(trimmedQuery) {
-		fmt.Printf("Rejected SELECT query with more than 1 column: %s\n", query)
+	// クエリをトリムして大文字に変換し、SELECTで始まるかを確認
+	trimmedQuery := strings.TrimSpace(query)
+	if !strings.HasPrefix(strings.ToUpper(trimmedQuery), "SELECT") {
+		fmt.Printf("Rejected non-SELECT query: %s\n", query)
 		return false
 	}
 
-	// limit 1が含まれているかを確認
-	if !strings.Contains(strings.ToUpper(trimmedQuery), "LIMIT 1") {
-		fmt.Printf("Rejected SELECT query without LIMIT 1: %s\n", query)
+	// sqlチェック
+	if !checkSQL(strings.ToUpper(trimmedQuery)) {
 		return false
 	}
 
 	return true
 }
 
-// ファイルからクエリを読み込んで返す
+// ファイルから1行のクエリを読み込む
 func readQueryFromFile(filename string) (string, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -101,12 +111,15 @@ func readQueryFromFile(filename string) (string, error) {
 	}
 	defer file.Close()
 
-	content, err := io.ReadAll(file)
-	if err != nil {
-		return "", err
+	scanner := bufio.NewScanner(file)
+
+	// 1行目のみ読み込む
+	var query string
+	if scanner.Scan() {
+		query = scanner.Text()
 	}
 
-	return string(content), nil
+	return query, nil
 }
 
 // クエリを実行して取得した文字列を返す
@@ -132,7 +145,6 @@ func Do() *checkers.Checker {
 	}
 	defer db.Close()
 
-	// クエリを検証
 	if !isValidSQL(db, query) {
 		return checkers.Critical(fmt.Sprintf("Invalid SQL: %s", query))
 	}
@@ -143,7 +155,7 @@ func Do() *checkers.Checker {
 	}
 
 	if result != opts.VALUE {
-		return checkers.Critical("Not expected value")
+		return checkers.Critical(fmt.Sprintf("Value does not match: %s != %s", result, opts.VALUE))
 	}
 
 	return checkers.Ok("OK")
